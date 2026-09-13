@@ -37,7 +37,7 @@ export default async function SettingsPage() {
             </tr>
           </thead>
           <tbody>
-            {org?.users.map((u: { id: string; name: string; email: string; role: string }) => (
+            {org?.users.map((u: { id: string; name: string; email: string|null; role: string }) => (
               <tr key={u.id} className="border-b border-paper-300">
                 <td className="py-2.5">
                   {u.name}

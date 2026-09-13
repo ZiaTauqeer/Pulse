@@ -16,7 +16,7 @@ export async function logAction(params: {
         action: params.action,
         targetType: params.targetType,
         targetId: params.targetId,
-        metadata: params.metadata,
+        metadata: params.metadata as any,
       },
     });
   } catch (err) {
