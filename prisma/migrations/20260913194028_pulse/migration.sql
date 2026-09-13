@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "CustomerFeatureSnapshot_customerId_snapshotDate_featureVer_key" RENAME TO "CustomerFeatureSnapshot_customerId_snapshotDate_featureVers_key";

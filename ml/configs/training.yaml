@@ -1,0 +1,189 @@
+# =============================================================================
+# PULSE — ML pipeline configuration
+#
+# THIS IS THE FILE YOU WILL EDIT MOST OFTEN.
+# Every stage of the pipeline (synthetic generation, feature building,
+# splitting, training, evaluation) reads from here instead of having
+# parameters hardcoded in Python. Change a value here and re-run the
+# relevant `python -m pipeline.<stage>` command — no source edits needed.
+# =============================================================================
+
+random_seed: 42
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  synthetic_dir: "data/synthetic"
+  artifacts_dir: "artifacts"
+  models_dir: "artifacts/models"
+  reports_dir: "artifacts/reports"
+  metadata_dir: "artifacts/metadata"
+
+# ---------------------------------------------------------------------------
+# Synthetic data generation (ml/src/synthetic/generate.py)
+# Edit these to change the size/shape/realism of the demo dataset.
+# ---------------------------------------------------------------------------
+synthetic:
+  n_customers: 9000
+  simulation_days: 240          # total days of simulated history per customer
+  snapshot_day: 210             # the "as of today" day features are computed from
+  observation_window_days: 90   # how far back features look from the snapshot
+  prediction_window_days: 30    # label = did the customer churn within this window after snapshot
+  min_tenure_days_for_churn: 30 # customers can't churn before this many days
+  # Tuned (see ml/README.md "Calibrating the synthetic generator") so the
+  # modeling snapshot lands around a 12-15% positive rate with several
+  # thousand alive customers - enough signal for stable train/val/test
+  # metrics without being unrealistically balanced. Raise to increase churn
+  # rate, lower to decrease it; re-run `python -m pipeline.generate_synthetic`.
+  base_daily_churn_hazard: 0.0050
+  trajectory_mix:               # probability of each latent engagement trajectory
+    declining: 0.28
+    stable: 0.52
+    growing: 0.20
+  contract_types: ["month-to-month", "one-year", "two-year"]
+  subscription_types: ["basic", "pro", "enterprise"]
+  regions: ["North America", "Europe", "APAC", "LATAM"]
+  industries: ["Retail", "Fintech", "Healthcare", "Manufacturing", "Media", "Logistics", "Education", "SaaS"]
+
+# ---------------------------------------------------------------------------
+# Canonical target / identifier columns
+# ---------------------------------------------------------------------------
+target:
+  column: "churned_within_window"
+  positive_label: 1
+  customer_id_column: "customer_id"
+
+# ---------------------------------------------------------------------------
+# Fields that must NEVER be used as model inputs (target-leakage guard).
+# See ml/src/features/excluded_features.py for the documented reasoning
+# behind each entry — this list is enforced programmatically at train
+# and inference time, not just documentation.
+# ---------------------------------------------------------------------------
+excluded_features:
+  - "churn_date"
+  - "customer_status"
+  - "days_to_churn"
+  - "churned_within_window"     # the target itself
+  - "customer_id"
+  - "name"
+  - "signup_date"
+  - "snapshot_date"
+
+# ---------------------------------------------------------------------------
+# Train / validation / test split
+# ---------------------------------------------------------------------------
+split:
+  strategy: "stratified"        # "stratified" or "temporal"
+  test_size: 0.20
+  val_size: 0.15                # fraction of the remaining train set
+  stratify_on: "churned_within_window"
+
+# ---------------------------------------------------------------------------
+# Class imbalance handling
+# ---------------------------------------------------------------------------
+imbalance:
+  strategy: "class_weight"      # "class_weight" | "none"
+
+# ---------------------------------------------------------------------------
+# Model candidates. `enabled: false` skips a candidate without deleting it.
+# ---------------------------------------------------------------------------
+models:
+  baseline:
+    type: "majority_class"
+    enabled: true
+
+  logistic_regression:
+    type: "logistic_regression"
+    enabled: true
+    params:
+      max_iter: 2000
+      C: 1.0
+
+  random_forest:
+    type: "random_forest"
+    enabled: true
+    params:
+      n_estimators: 300
+      max_depth: 5
+      min_samples_leaf: 15
+
+  gradient_boosting:
+    type: "xgboost"
+    enabled: true
+    params:
+      n_estimators: 150
+      max_depth: 3
+      learning_rate: 0.04
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_lambda: 2.0
+      min_child_weight: 8
+
+# ---------------------------------------------------------------------------
+# Hyperparameter tuning (applied to the model selected as best-of-candidates)
+# ---------------------------------------------------------------------------
+tuning:
+  enabled: true
+  method: "randomized_search"
+  n_iter: 25
+  cv_folds: 5
+  scoring: "roc_auc"
+  # A separate search space per model type - whichever candidate wins on
+  # the validation set gets tuned using its own space below. Add a new
+  # model type here (matching its name in `models:` above) to enable
+  # tuning for it; unlisted types are skipped with a note in the report.
+  param_distributions_by_type:
+    xgboost:
+      n_estimators: [80, 100, 150, 200, 250]
+      max_depth: [2, 3, 4]
+      learning_rate: [0.02, 0.03, 0.04, 0.06, 0.08]
+      subsample: [0.6, 0.7, 0.8, 0.9]
+      colsample_bytree: [0.6, 0.7, 0.8, 0.9]
+      reg_lambda: [1.0, 2.0, 3.0, 5.0]
+      min_child_weight: [3, 5, 8, 10]
+    random_forest:
+      n_estimators: [150, 200, 300, 400, 500]
+      max_depth: [3, 4, 5, 6, 8]
+      min_samples_leaf: [5, 10, 15, 20, 30]
+      max_features: ["sqrt", "log2", 0.5]
+    logistic_regression:
+      C: [0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
+      penalty: ["l2"]
+
+# ---------------------------------------------------------------------------
+# Selection criterion for picking the winning model among candidates.
+# ---------------------------------------------------------------------------
+selection:
+  primary_metric: "roc_auc"
+  secondary_metric: "pr_auc"
+
+# ---------------------------------------------------------------------------
+# Probability calibration
+# ---------------------------------------------------------------------------
+calibration:
+  enabled: true
+  method: "sigmoid"           # isotonic was tried first but collapsed ~2000 distinct
+                               # scores into ~40 tied values on this validation set size
+                               # (see ml/README.md "Calibration method choice"). Sigmoid
+                               # (Platt scaling) is a smooth monotonic fit that preserves
+                               # ranking - important since the product needs to rank
+                               # customers by risk, not just bucket them.
+
+# ---------------------------------------------------------------------------
+# Explainability
+# ---------------------------------------------------------------------------
+explainability:
+  method: "shap"                # falls back to permutation_importance if shap unavailable
+  max_background_samples: 200
+  top_k_contributors: 5
+
+# ---------------------------------------------------------------------------
+# Versioning — bump these when you intentionally change the feature set
+# or want a fresh model lineage. The registry auto-increments the patch
+# version within a lineage; it never overwrites a prior version.
+# ---------------------------------------------------------------------------
+versioning:
+  model_id: "PULSE-CHURN"
+  feature_version: "features-1.0"
+  dataset_version: "dataset-v1"

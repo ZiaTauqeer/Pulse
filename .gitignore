@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.env
+.env.local
+.next/
+*.log
+
+# ML pipeline generated data/artifacts - fully reproducible from a seed,
+# not checked in (see ml/README.md Quickstart)
+ml/data/raw/*
+ml/data/interim/*
+ml/data/synthetic/*
+ml/data/processed/*
+!ml/data/**/.gitkeep
+ml/artifacts/models/*
+ml/artifacts/reports/*
+ml/artifacts/metadata/*
+!ml/artifacts/**/.gitkeep
+
+__pycache__/
+*.pyc
+.pytest_cache/
+
+.vercel

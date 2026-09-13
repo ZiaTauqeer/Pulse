@@ -1,0 +1,415 @@
+// PULSE — PostgreSQL schema
+//
+// Design decisions worth knowing before you edit this file:
+//
+// 1. Auth uses JWT sessions (Auth.js / NextAuth Credentials provider), not
+//    database sessions - there is deliberately no Session/Account/
+//    VerificationToken model here. If you add an OAuth provider later
+//    (Google, etc.) you will need to add Auth.js's standard Account model
+//    back in; see https://authjs.dev/reference/adapter/prisma for the
+//    exact shape it expects.
+//
+// 2. `contractType` / `subscriptionType` / event `type` fields are plain
+//    Strings, not Prisma enums. These are the fields most likely to grow
+//    a new value (a new plan tier, a new event type) and a Postgres enum
+//    requires a migration to add a value - a String plus an application-
+//    level constant list (see src/lib/constants/*.ts once the app is
+//    scaffolded) is cheaper to extend. Truly structural, rarely-changing
+//    sets (Role, RiskLevel, ModelStatus) ARE Prisma enums below.
+//
+// 3. Customer.id is the natural ML customer_id (e.g. "CUS-100000"), not a
+//    generated cuid - this keeps a direct, traceable 1:1 mapping to the
+//    rows the ML pipeline (ml/data/synthetic/customers.csv) produces, with
+//    no translation table needed between the two systems.
+//
+// 4. CustomerFeatureSnapshot stores the handful of fields the UI and AI
+//    tool-calls query directly as real columns (so they're indexable and
+//    filterable in SQL), PLUS the complete feature vector as `rawFeatures`
+//    JSON for full fidelity with ml/artifacts/metadata/feature_manifest.json.
+//    If you add a new engineered feature in the ML pipeline, it shows up
+//    in `rawFeatures` immediately with no migration; promote it to a real
+//    column here only if the app needs to filter/sort on it directly.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy + access control
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users     User[]
+  customers Customer[]
+  auditLogs AuditLog[]
+}
+
+enum Role {
+  ADMIN // full access: settings, user management, model promotion
+  ANALYST // full read access + AI assistant + can create recommendations
+  CS_MANAGER // customer-facing views, can act on recommendations
+  VIEWER // read-only
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  email        String? @unique
+  username     String  @unique
+  name         String
+  passwordHash String
+  role         Role    @default(VIEWER)
+  emailVerified DateTime?
+  image        String?
+  lastLoginAt  DateTime?
+
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  auditLogs  AuditLog[]
+  recommendationsCreated Recommendation[] @relation("RecommendationCreatedBy")
+  customersCreated Customer[] @relation("CustomerCreatedBy")
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Customers + account data
+// ---------------------------------------------------------------------------
+
+enum CustomerStatus {
+  ACTIVE
+  CHURNED
+}
+
+// Distinguishes synthetic demo/training data from real product usage -
+// see README "Demo data vs. real data". Never delete SEED rows via the
+// app UI; MANUAL and IMPORT rows are what a real user actually created.
+enum CustomerSource {
+  SEED
+  MANUAL
+  IMPORT
+}
+
+model Customer {
+  id             String       @id // natural ML customer_id, e.g. "CUS-100000"
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String // company name
+  contactName String?
+  signupDate  DateTime
+  contractType      String // "month-to-month" | "one-year" | "two-year" (see note at top of file)
+  subscriptionType  String // "basic" | "pro" | "enterprise"
+  monthlyRevenue    Decimal  @db.Decimal(10, 2)
+  region      String
+  industry    String
+  status      CustomerStatus @default(ACTIVE)
+  churnDate   DateTime?
+  source      CustomerSource @default(SEED)
+  createdByUserId String?
+  createdByUser   User? @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  archivedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events              CustomerEvent[]
+  transactions        Transaction[]
+  supportTickets      SupportTicket[]
+  sentimentResults    SentimentResult[]
+  featureSnapshots    CustomerFeatureSnapshot[]
+  prediction          Prediction?
+  predictionHistory   PredictionHistory[]
+  segmentMembership   SegmentMembership?
+  recommendations     Recommendation[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([subscriptionType])
+  @@index([source])
+}
+
+// ---------------------------------------------------------------------------
+// Behavioral data
+// ---------------------------------------------------------------------------
+
+model CustomerEvent {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  eventType  String // "login" | "feature_use" | "subscription_cancelled" | "subscription_upgrade" | "subscription_downgrade"
+  occurredAt DateTime
+  metadata   Json?
+
+  @@index([customerId, occurredAt])
+  @@index([eventType])
+}
+
+model Transaction {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  type       String // "purchase" | "refund"
+  amount     Decimal  @db.Decimal(10, 2)
+  occurredAt DateTime
+
+  @@index([customerId, occurredAt])
+}
+
+// ---------------------------------------------------------------------------
+// Support + sentiment
+// ---------------------------------------------------------------------------
+
+model SupportTicket {
+  id         String   @id // natural ML ticket_id, e.g. "TCK-1"
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  openedAt             DateTime
+  resolvedAt           DateTime?
+  responseTimeHours    Float?
+  resolutionTimeHours  Float?
+  resolved             Boolean  @default(false)
+  repeatTicket         Boolean  @default(false)
+
+  messages         SupportMessage[]
+  sentimentResults SentimentResult[]
+
+  @@index([customerId, openedAt])
+  @@index([resolved])
+}
+
+enum MessageSender {
+  CUSTOMER
+  AGENT
+}
+
+// Normalized per spec's "support_messages" entity. Current synthetic seed
+// data populates one representative CUSTOMER message per ticket (the same
+// text used for the tied SentimentResult below) - a real support-platform
+// integration would populate the full back-and-forth thread here.
+model SupportMessage {
+  id       String        @id @default(cuid())
+  ticketId String
+  ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  sender  MessageSender
+  body    String
+  sentAt  DateTime
+
+  @@index([ticketId, sentAt])
+}
+
+enum SentimentLabel {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+
+model SentimentResult {
+  id         String   @id @default(cuid()) // seeded with natural ML sentiment_id, e.g. "SNT-1"
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ticketId   String?
+  ticket     SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  source          String // "support" | "feedback"
+  message         String
+  sentimentLabel  SentimentLabel
+  sentimentScore  Float // -1.0 to 1.0
+  modelVersion    String // e.g. "synthetic-seed-v1" for seed data, a real model id for production
+  occurredAt      DateTime
+
+  @@index([customerId, occurredAt])
+  @@index([sentimentLabel])
+}
+
+// ---------------------------------------------------------------------------
+// ML feature + prediction data
+// ---------------------------------------------------------------------------
+
+model CustomerFeatureSnapshot {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  snapshotDate   DateTime
+  featureVersion String
+
+  // Promoted columns - the ones the UI/AI tools query directly.
+  // See ml/artifacts/metadata/feature_manifest.json for the full feature
+  // list; rawFeatures below always has the complete set regardless of
+  // which ones are promoted here.
+  loginCount30d             Int
+  featureUseCount30d        Int
+  daysSinceLastActivity     Int
+  usageTrend30vsPrior30     Float
+  avgSentiment90d           Float?
+  negativeSentimentRatio90d Float?
+  sentimentChange30d        Float?
+  unresolvedTicketCount     Int
+  avgResolutionTimeHours90d Float?
+  revenue90d                Decimal  @db.Decimal(10, 2)
+  refundCount90d            Int
+  refundRate90d             Float
+  tenureDaysAtSnapshot      Int
+
+  rawFeatures Json // complete feature vector as computed by ml/src/features/build_features.py
+
+  @@unique([customerId, snapshotDate, featureVersion])
+  @@index([customerId, snapshotDate])
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Current prediction per customer - upserted every time the batch scoring
+// job (ml pipeline.predict, synced via prisma/seed.ts or a scheduled job)
+// runs. One row per customer; see PredictionHistory for the full trend.
+model Prediction {
+  id         String   @id @default(cuid())
+  customerId String   @unique
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  churnProbability     Float
+  riskLevel            RiskLevel
+  modelId              String
+  modelVersion         String
+  recommendedThreshold Float
+  predictedAt          DateTime
+  topContributors      Json // [{feature, rawFeature, customerValue, contribution, direction}]
+
+  @@index([riskLevel])
+  @@index([churnProbability])
+}
+
+model PredictionHistory {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  churnProbability Float
+  riskLevel        RiskLevel
+  modelVersion     String
+  predictedAt      DateTime
+
+  @@index([customerId, predictedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Segmentation
+// ---------------------------------------------------------------------------
+
+model Segment {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  characteristics Json? // e.g. cluster centroid summary stats
+  modelVersion    String // clustering run identifier
+  createdAt       DateTime @default(now())
+
+  memberships SegmentMembership[]
+}
+
+// One current segment per customer (not historized - segment reassignment
+// happens on each clustering run and simply overwrites this row).
+model SegmentMembership {
+  id         String   @id @default(cuid())
+  customerId String   @unique
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  segmentId  String
+  segment    Segment  @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  @@index([segmentId])
+}
+
+// ---------------------------------------------------------------------------
+// AI recommendations
+// ---------------------------------------------------------------------------
+
+enum RecommendationStatus {
+  OPEN
+  DISMISSED
+  COMPLETED
+}
+
+model Recommendation {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  text      String
+  evidence  Json // array of grounded evidence strings, e.g. ["usage declined 42%", "2 unresolved tickets"]
+  status    RecommendationStatus @default(OPEN)
+  createdByUserId String?
+  createdByUser   User? @relation("RecommendationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Audit + model governance
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action     String // e.g. "viewed_customer", "dismissed_recommendation", "promoted_model"
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([userId])
+}
+
+enum ModelStatus {
+  CANDIDATE
+  PRODUCTION
+  RETIRED
+}
+
+// Mirrors ml/artifacts/metadata/model_registry.json - synced by
+// prisma/seed.ts (or a dedicated sync script) after each training run.
+model ModelVersion {
+  id                   String      @id @default(cuid())
+  modelId              String
+  version              String
+  algorithm            String
+  datasetVersion       String
+  featureVersion       String
+  trainedAt            DateTime
+  metrics              Json // roc_auc, pr_auc, precision, recall, f1, confusion matrix, etc.
+  recommendedThreshold Float
+  riskBands            Json
+  status               ModelStatus
+
+  @@unique([modelId, version])
+  @@index([status])
+}
