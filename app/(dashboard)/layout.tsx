@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { auth, signOut } from "@/auth";
 import { NavRail } from "@/components/nav-rail";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const session = await auth();
@@ -16,6 +17,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
           <NavRail />
         </div>
         <div className="border-t border-ink-700 px-3 py-3">
+          <ThemeToggle className="mb-3" />
           <p className="truncate px-3 text-xs text-ink-400">{session?.user?.email}</p>
           <form
             action={async () => {

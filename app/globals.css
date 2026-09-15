@@ -5,64 +5,162 @@
  *
  * Structural metaphor: the app SHELL (nav, header, footer) is a dark,
  * desaturated "ink" - like an instrument housing. The WORKING CANVAS where
- * customer data actually lives is a cool, muted "paper" tone - like a
- * report on the desk in front of you. This split is deliberate, not
- * decorative: it separates navigation chrome from analytical content at a
- * glance, and it's why this isn't just "another dark-mode dashboard."
+ * customer data actually lives is a "paper" surface - a report on the
+ * desk in front of you in light mode, and the primary black surface in
+ * dark mode. This split is deliberate, not decorative.
  *
- * Colors are named by role, not by hue, so a future re-theme only touches
- * this block. See README's "frequently changing" table.
+ * THEME SYSTEM: every color below is defined twice - once as a raw token
+ * at :root (light mode default) and once again under :root.dark (dark
+ * mode). The @theme block only ever references these raw tokens via
+ * var(...), never a literal color - so every existing component using
+ * bg-paper-200 / text-ink-700 / bg-accent-500 / bg-risk-high-bg etc.
+ * re-themes automatically. No component file needed to change for dark
+ * mode to work. Theme state itself is managed by next-themes
+ * (ThemeProvider in app/layout.tsx), which toggles a "dark" class on
+ * <html> - see that file and src/components/theme-toggle.tsx.
  */
+
+:root {
+  /* Ink - shell chrome (nav, header, footer) */
+  --ink-950: #12151b;
+  --ink-900: #161a20;
+  --ink-800: #20252d;
+  --ink-700: #2b313b;
+  --ink-600: #3a414d;
+  --ink-500: #55606f;
+  --ink-400: #6b7280;
+  --ink-300: #8b93a0;
+  --ink-200: #a8adb6;
+  --ink-100: #e8e6df;
+
+  /* Paper - main working-canvas surface */
+  --paper-100: #f4f2ec;
+  --paper-200: #eae7df;
+  --paper-300: #ddd9cd;
+  --paper-400: #c8c3b3;
+  --paper-ink: #1b1e23;
+
+  /* Accent - the ONE brand/interactive color. Teal in light mode. */
+  --accent-100: #d8e9e7;
+  --accent-300: #7fada9;
+  --accent-500: #2f6f6b;
+  --accent-600: #235450;
+  --accent-700: #1a403d;
+
+  /* Risk ramp - separate hue family from the accent, so interaction and
+     risk are never visually confused. */
+  --risk-low: #4c7a5e;
+  --risk-low-bg: #e3ece5;
+  --risk-medium: #a3801f;
+  --risk-medium-bg: #f0e8d3;
+  --risk-high: #b5602e;
+  --risk-high-bg: #f3e2d4;
+  --risk-critical: #a23e3e;
+  --risk-critical-bg: #f2dcdc;
+
+  /* Cyber-yellow - reserved for dark mode. Declared (unused) at :root too
+     so the token always exists; dark mode is what actually activates it. */
+  --cyber-yellow-dim: #47410a;
+  --cyber-yellow: #c6bd0d;
+  --cyber-yellow-bright: #e9db1c;
+  --cyber-yellow-peak: #f7f0a6;
+  --cyber-yellow-glow-rgb: 226, 214, 20;
+
+  color-scheme: light;
+}
+
+:root.dark {
+  /* Ink - the shell gets closer to true black; active/selected nav states
+     read from the accent (now cyber-yellow) instead of teal. */
+  --ink-950: #050505;
+  --ink-900: #0a0a09;
+  --ink-800: #141310;
+  --ink-700: #232019;
+  --ink-600: #343023;
+  --ink-500: #625c46;
+  --ink-400: #8a8570;
+  --ink-300: #a6a08b;
+  --ink-200: #c2bda6;
+  --ink-100: #f2efe4;
+
+  /* Paper - now the primary black surface and secondary dark charcoal,
+     per spec: "deep black / near-black" background, "very dark
+     charcoal/black" secondary surfaces, "warm/light neutral text". */
+  --paper-100: #121110;
+  --paper-200: #070707;
+  --paper-300: #262420;
+  --paper-400: #38352c;
+  --paper-ink: #ede8d8;
+
+  /* Accent - cyber-yellow becomes the ONE interactive/brand color. */
+  --accent-100: #3a3410;
+  --accent-300: #a89f2c;
+  --accent-500: #c6bd0d;
+  --accent-600: #a89f0a;
+  --accent-700: #f2e98a;
+
+  /* Risk ramp - same hues, re-tuned lighter/more saturated for contrast
+     against near-black, with dark tinted (not light pastel) badge
+     backgrounds so chips belong to the black surface, not float on it. */
+  --risk-low: #7fc797;
+  --risk-low-bg: #16261c;
+  --risk-medium: #e3bb4c;
+  --risk-medium-bg: #2c2210;
+  --risk-high: #e2935c;
+  --risk-high-bg: #2e2013;
+  --risk-critical: #e8807e;
+  --risk-critical-bg: #2c1616;
+
+  /* Cyber-yellow ramp, active. Derived from the reference visual: a
+     controlled mustard-gold family, not flattened to one flat RGB value -
+     dim (background dots) -> base -> bright (cursor-proximity) -> peak
+     (near-white-yellow highlight, for the brightest active points only).
+     See src/components/dot-matrix-field.tsx for how these are consumed. */
+  --cyber-yellow-dim: #47410a;
+  --cyber-yellow: #c9bd12;
+  --cyber-yellow-bright: #ecdd22;
+  --cyber-yellow-peak: #f8f2b8;
+  --cyber-yellow-glow-rgb: 233, 219, 28;
+
+  color-scheme: dark;
+}
+
 @theme {
   --font-serif: var(--font-serif), ui-serif, Georgia, serif;
   --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Ink - dark shell chrome (nav, header, footer, modals-on-dark) */
-  --color-ink-950: #12151b;
-  --color-ink-900: #161a20;
-  --color-ink-800: #20252d;
-  --color-ink-700: #2b313b;
-  --color-ink-600: #3a414d;
-  --color-ink-400: #6b7280;
-  --color-ink-200: #a8adb6;
-  --color-ink-100: #e8e6df;
+  --color-ink-950: var(--ink-950);
+  --color-ink-900: var(--ink-900);
+  --color-ink-800: var(--ink-800);
+  --color-ink-700: var(--ink-700);
+  --color-ink-600: var(--ink-600);
+  --color-ink-500: var(--ink-500);
+  --color-ink-400: var(--ink-400);
+  --color-ink-300: var(--ink-300);
+  --color-ink-200: var(--ink-200);
+  --color-ink-100: var(--ink-100);
 
-  /* Paper - light working-canvas surface (main content area) */
-  --color-paper-100: #f4f2ec;
-  --color-paper-200: #eae7df;
-  --color-paper-300: #ddd9cd;
-  --color-paper-400: #c8c3b3;
-  --color-paper-ink: #1b1e23;
+  --color-paper-100: var(--paper-100);
+  --color-paper-200: var(--paper-200);
+  --color-paper-300: var(--paper-300);
+  --color-paper-400: var(--paper-400);
+  --color-paper-ink: var(--paper-ink);
 
-  /* Accent - the ONE brand/interactive color. Deliberately teal, not
-     terracotta or purple, and deliberately never reused for risk semantics. */
-  --color-accent-100: #d8e9e7;
-  --color-accent-300: #7fada9;
-  --color-accent-500: #2f6f6b;
-  --color-accent-600: #235450;
-  --color-accent-700: #1a403d;
+  --color-accent-100: var(--accent-100);
+  --color-accent-300: var(--accent-300);
+  --color-accent-500: var(--accent-500);
+  --color-accent-600: var(--accent-600);
+  --color-accent-700: var(--accent-700);
 
-  /* Risk ramp - LOW / MEDIUM / HIGH / CRITICAL. A separate hue family
-     from the accent above so interaction and risk are never confused. */
-  --color-risk-low: #4c7a5e;
-  --color-risk-low-bg: #e3ece5;
-  --color-risk-medium: #a3801f;
-  --color-risk-medium-bg: #f0e8d3;
-  --color-risk-high: #b5602e;
-  --color-risk-high-bg: #f3e2d4;
-  --color-risk-critical: #a23e3e;
-  --color-risk-critical-bg: #f2dcdc;
-}
-
-@media (prefers-color-scheme: dark) {
-  /* PULSE is an operational tool people leave open all day; a forced
-     dark-only or light-only mode would fight the OS. Both palettes above
-     were built to hold contrast either way - see components for usage. */
-}
-
-html {
-  color-scheme: light;
+  --color-risk-low: var(--risk-low);
+  --color-risk-low-bg: var(--risk-low-bg);
+  --color-risk-medium: var(--risk-medium);
+  --color-risk-medium-bg: var(--risk-medium-bg);
+  --color-risk-high: var(--risk-high);
+  --color-risk-high-bg: var(--risk-high-bg);
+  --color-risk-critical: var(--risk-critical);
+  --color-risk-critical-bg: var(--risk-critical-bg);
 }
 
 body {

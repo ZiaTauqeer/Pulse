@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { DotMatrixField } from "@/components/dot-matrix-field";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const capabilities = [
   {
@@ -27,6 +28,7 @@ export default function LandingPage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <span className="font-serif text-lg text-ink-100">PULSE</span>
           <nav className="flex items-center gap-6 text-sm text-ink-200">
+            <ThemeToggle />
             <Link href="/legal/privacy" className="hover:text-ink-100">
               Privacy
             </Link>
@@ -58,7 +60,7 @@ export default function LandingPage() {
         </section>
 
         <div className="relative mx-auto mt-12 h-64 max-w-5xl px-6 sm:h-80">
-          <DotMatrixField className="h-full w-full" color="#2f6f6b" />
+          <DotMatrixField className="h-full w-full" />
         </div>
 
         <section className="mx-auto max-w-5xl border-t border-paper-400 px-6 py-14">
